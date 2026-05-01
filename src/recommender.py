@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -33,12 +34,41 @@ class RecommendationEngine:
                 "Run preprocessing first."
             )
 
-        tfidf = TfidfVectorizer(stop_words="english", max_features=15000)
-        matrix = tfidf.fit_transform(df["content"].fillna(""))
-        cosine_sim = cosine_similarity(matrix, matrix)
+        # Main semantic signal from combined content.
+        content_tfidf = TfidfVectorizer(
+            stop_words="english",
+            max_features=20000,
+            ngram_range=(1, 2),
+            min_df=1,
+            sublinear_tf=True,
+        )
+        content_matrix = content_tfidf.fit_transform(df["content"].fillna(""))
+        content_sim = cosine_similarity(content_matrix, content_matrix)
+
+        # Explicit genre overlap signal.
+        genres_text = (
+            df["genres"]
+            .fillna("")
+            .astype(str)
+            .str.replace("|", " ", regex=False)
+        )
+        genre_vectorizer = CountVectorizer(token_pattern=r"(?u)\b[\w-]+\b", lowercase=True)
+        genre_matrix = genre_vectorizer.fit_transform(genres_text)
+        genre_sim = cosine_similarity(genre_matrix, genre_matrix)
+
+        # Title character n-grams help same-franchise/sequel matching.
+        title_tfidf = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 5), min_df=1)
+        title_matrix = title_tfidf.fit_transform(df["title"].fillna("").astype(str))
+        title_sim = cosine_similarity(title_matrix, title_matrix)
+
+        cosine_sim = (0.55 * content_sim) + (0.30 * genre_sim) + (0.15 * title_sim)
         return cls(movies_df=df, cosine_sim_matrix=cosine_sim)
 
     def get_recommendations(self, movie_title: str, top_n: int = 10) -> list[str]:
+        ranked = self.get_recommendations_with_scores(movie_title, top_n=top_n)
+        return [title for title, _ in ranked]
+
+    def get_recommendations_with_scores(self, movie_title: str, top_n: int = 10) -> list[tuple[str, float]]:
         if top_n < 1:
             raise ValueError("top_n must be >= 1")
 
@@ -61,10 +91,10 @@ class RecommendationEngine:
         scores = list(enumerate(self.cosine_sim_matrix[movie_idx]))
         scores_sorted = sorted(scores, key=lambda item: item[1], reverse=True)
 
-        recommendations: list[str] = []
+        recommendations: list[tuple[str, float]] = []
         seen_titles: set[str] = {canonicalize_title(self.movies_df.iloc[movie_idx]["title"]).lower()}
 
-        for idx, _ in scores_sorted:
+        for idx, score in scores_sorted:
             if idx == movie_idx:
                 continue
 
@@ -74,7 +104,7 @@ class RecommendationEngine:
                 continue
 
             seen_titles.add(title_key)
-            recommendations.append(title)
+            recommendations.append((title, float(score)))
             if len(recommendations) >= top_n:
                 break
 

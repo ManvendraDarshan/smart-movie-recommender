@@ -52,11 +52,11 @@ def load_and_clean_dataset(csv_path: str | Path) -> pd.DataFrame:
 
     stemmer = PorterStemmer()
 
+    # Weight higher-signal fields by repeating them in the final content text.
+    # This improves retrieval quality for small datasets.
     combined = (
-        df["genres"].astype(str)
-        + " "
-        + df["keywords"].astype(str)
-        + " "
+        (df["genres"].astype(str) + " ") * 3
+        + (df["keywords"].astype(str) + " ") * 2
         + df["plot"].astype(str)
     )
 
